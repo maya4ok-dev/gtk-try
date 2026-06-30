@@ -1,3 +1,5 @@
+#include <gdk/gdkkeysyms.h>
+#include <gdk/gdk.h>
 #include <glib.h>
 #include <gio/gio.h>
 #include <glib-object.h>
@@ -12,14 +14,12 @@ typedef struct {
     GtkWidget* todos;
     GtkWidget* main_box;
     GtkWidget* entry;
+    GtkEntryBuffer* entry_buffer;
     GtkWidget* tool_box;
 } TodoState;
 
-static void add_todo(GtkButton* button G_GNUC_UNUSED, gpointer todo_state) {
-    TodoState* state = todo_state;
-
-    GtkEntryBuffer* entry_buffer = gtk_entry_get_buffer(GTK_ENTRY(state->entry));
-    const char* entry_text = gtk_entry_buffer_get_text(entry_buffer);
+void add_todo(TodoState* todo_state) {
+    const char* entry_text = gtk_entry_buffer_get_text(todo_state->entry_buffer);
 
     if (g_strcmp0(entry_text, "") == 0)
         return;
@@ -27,19 +27,40 @@ static void add_todo(GtkButton* button G_GNUC_UNUSED, gpointer todo_state) {
     GtkWidget* label = gtk_label_new(entry_text);
 
     // -1 means gtk will select every character until the end of the text
-    gtk_entry_buffer_delete_text(entry_buffer, 0, -1);
-    gtk_list_box_append(GTK_LIST_BOX(state->todos), label);
+    gtk_entry_buffer_delete_text(todo_state->entry_buffer, 0, -1);
+    gtk_list_box_append(GTK_LIST_BOX(todo_state->todos), label);
 }
 
-static void del_todo(GtkButton* button G_GNUC_UNUSED, gpointer todo_state) {
-    TodoState* state = todo_state;
-
-    GtkListBoxRow* selected_todo = gtk_list_box_get_selected_row(GTK_LIST_BOX(state->todos));
+static void delete_todo(TodoState* todo_state) {
+    GtkListBoxRow* selected_todo = gtk_list_box_get_selected_row(GTK_LIST_BOX(todo_state->todos));
     if (selected_todo == NULL) return;
-    gtk_list_box_remove(GTK_LIST_BOX(state->todos), GTK_WIDGET(selected_todo));
+    gtk_list_box_remove(GTK_LIST_BOX(todo_state->todos), GTK_WIDGET(selected_todo));
 }
 
-static void activate(GtkApplication* app, gpointer todo_state) {
+static void on_add_button(GtkButton* button G_GNUC_UNUSED, gpointer todo_state) {
+    add_todo(todo_state);
+}
+
+static void entry_on_enter(GtkEntry* entry G_GNUC_UNUSED, gpointer todo_state) {
+    add_todo(todo_state);
+}
+
+static void on_delete_button(GtkButton* button G_GNUC_UNUSED, gpointer todo_state) {
+    delete_todo(todo_state);
+}
+
+static gboolean todos_on_key(GtkEventControllerKey* controller G_GNUC_UNUSED, guint keyval, guint keycode G_GNUC_UNUSED, GdkModifierType state G_GNUC_UNUSED, gpointer todo_state) {
+    // here we're using keyvals from GDK to identify our Delete key and block everything else
+    // this callback returns boolean, true means key was handled so the controller intercepts the key event
+    // before it reaches the widget
+    // every single gdk keyval defined in the gdk/gdkkeysyms.h header
+    if (keyval != GDK_KEY_Delete)
+        return FALSE;
+    delete_todo(todo_state);
+    return TRUE;
+}
+
+static void activate(GtkApplication* app G_GNUC_UNUSED, gpointer todo_state) {
     TodoState* state = todo_state;
 
     // window
@@ -61,22 +82,30 @@ static void activate(GtkApplication* app, gpointer todo_state) {
     state->entry = gtk_entry_new();
     gtk_box_append(GTK_BOX(state->tool_box), state->entry);
     gtk_widget_set_hexpand(state->entry, TRUE);
+    g_signal_connect(state->entry, "activate", G_CALLBACK(entry_on_enter), state);
+    state->entry_buffer = gtk_entry_get_buffer(GTK_ENTRY(state->entry));
 
     // add button
     state->add_button = gtk_button_new();
     gtk_button_set_label(GTK_BUTTON(state->add_button), "+");
-    g_signal_connect(state->add_button, "clicked", G_CALLBACK(add_todo), state);
+    g_signal_connect(state->add_button, "clicked", G_CALLBACK(on_add_button), state);
     gtk_box_append(GTK_BOX(state->tool_box), state->add_button);
 
     // delete button
     state->del_button = gtk_button_new();
     gtk_button_set_label(GTK_BUTTON(state->del_button), "-");
-    g_signal_connect(state->del_button, "clicked", G_CALLBACK(del_todo), state);
+    g_signal_connect(state->del_button, "clicked", G_CALLBACK(on_delete_button), state);
     gtk_box_append(GTK_BOX(state->tool_box), state->del_button);
 
     // todo list box
     state->todos = gtk_list_box_new();
     gtk_box_append(GTK_BOX(state->main_box), state->todos);
+
+    // to handle Delete, we need to add a key controller on the todos ListBox
+    // and connect a callback
+    GtkEventController* key_controller = gtk_event_controller_key_new();
+    gtk_widget_add_controller(state->todos, key_controller);
+    g_signal_connect(key_controller, "key-pressed", G_CALLBACK(todos_on_key), state);
 
     gtk_window_present(GTK_WINDOW(state->window));
 }
